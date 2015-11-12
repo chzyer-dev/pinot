@@ -15,22 +15,6 @@
  */
 package com.linkedin.pinot.core.query.aggregation.groupby;
 
-import it.unimi.dsi.fastutil.PriorityQueue;
-import it.unimi.dsi.fastutil.objects.ObjectArrayPriorityQueue;
-
-import java.io.Serializable;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Comparator;
-import java.util.List;
-import java.util.Map;
-
-import org.json.JSONArray;
-import org.json.JSONException;
-import org.json.JSONObject;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import com.linkedin.pinot.common.Utils;
 import com.linkedin.pinot.common.request.AggregationInfo;
 import com.linkedin.pinot.common.request.GroupBy;
@@ -39,6 +23,16 @@ import com.linkedin.pinot.common.utils.DataTable;
 import com.linkedin.pinot.core.query.aggregation.AggregationFunction;
 import com.linkedin.pinot.core.query.aggregation.AggregationFunctionFactory;
 import com.linkedin.pinot.core.query.utils.Pair;
+import it.unimi.dsi.fastutil.PriorityQueue;
+import it.unimi.dsi.fastutil.objects.ObjectArrayPriorityQueue;
+import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.io.Serializable;
+import java.util.*;
 
 
 /**
@@ -118,55 +112,64 @@ public class AggregationGroupByOperatorService {
       if (finalAggregationResult == null || finalAggregationResult.size() != _aggregationFunctionList.size()) {
         return null;
       }
-      List<JSONObject> retJsonResultList = new ArrayList<JSONObject>();
-      for (int i = 0; i < _aggregationFunctionList.size(); ++i) {
-        JSONArray groupByResultsArray = new JSONArray();
 
-        int groupSize = _groupByColumns.size();
-        Map<String, Serializable> reducedGroupByResult = finalAggregationResult.get(i);
-        if (!reducedGroupByResult.isEmpty()) {
-
-          PriorityQueue priorityQueue =
-              getPriorityQueue(_aggregationFunctionList.get(i), reducedGroupByResult.values().iterator().next());
-          if (priorityQueue != null) {
-            for (String groupedKey : reducedGroupByResult.keySet()) {
-              priorityQueue.enqueue(new Pair(reducedGroupByResult.get(groupedKey), groupedKey));
-              if (priorityQueue.size() == (_groupByTopN + 1)) {
-                priorityQueue.dequeue();
-              }
-            }
-
-            int realGroupSize = _groupByTopN;
-            if (priorityQueue.size() < _groupByTopN) {
-              realGroupSize = priorityQueue.size();
-            }
-            for (int j = 0; j < realGroupSize; ++j) {
-              JSONObject groupByResultObject = new JSONObject();
-              Pair res = (Pair) priorityQueue.dequeue();
-              groupByResultObject.put(
-                  "group",
-                  new JSONArray(((String) res.getSecond()).split(
-                      GroupByConstants.GroupByDelimiter.groupByMultiDelimeter.toString(), groupSize)));
-              //          if (res.getFirst() instanceof Number) {
-              //            groupByResultObject.put("value", df.format(res.getFirst()));
-              //          } else {
-              //            groupByResultObject.put("value", res.getFirst());
-              //          }
-              //          groupByResultsArray.put(realGroupSize - 1 - j, groupByResultObject);
-              groupByResultObject.put("value",
-                  _aggregationFunctionList.get(i).render((Serializable) res.getFirst()).get("value"));
-              groupByResultsArray.put(realGroupSize - 1 - j, groupByResultObject);
-            }
-          }
-        }
-
-        JSONObject result = new JSONObject();
-        result.put("function", _aggregationFunctionList.get(i).getFunctionName());
-        result.put("groupByResult", groupByResultsArray);
-        result.put("groupByColumns", new JSONArray(_groupByColumns));
-        retJsonResultList.add(result);
+      JSONObject retJsonResultObj = new JSONObject();
+      ArrayList<JSONObject> ret = new ArrayList<JSONObject>();
+      ret.add(retJsonResultObj);
+      if (_aggregationFunctionList.size() == 0) {
+        return ret;
       }
-      return retJsonResultList;
+      retJsonResultObj.put("groupByColumns", new JSONArray(_groupByColumns));
+      List<String> aggFunctions = new ArrayList<>(_aggregationFunctionList.size());
+      for (int i=0; i<_aggregationFunctionList.size(); i++) {
+        aggFunctions.add(i, _aggregationFunctionList.get(i).getFunctionName());
+      }
+
+      PriorityQueue priorityQueue = getGroupByPriorityQueue();
+      if (priorityQueue == null) return ret;
+
+      Set<String> groupByKeySet = finalAggregationResult.get(0).keySet();
+      for (String groupedKey : groupByKeySet) {
+        List<Serializable> values = new ArrayList<>(_aggregationFunctionList.size());
+        for (int i=0; i<_aggregationFunctionList.size(); i++) {
+          Map<String, Serializable> reducedGroupByResult = finalAggregationResult.get(i);
+          if (reducedGroupByResult.isEmpty()) continue;
+          values.add(i, reducedGroupByResult.get(groupedKey));
+        }
+        priorityQueue.enqueue(new Pair(groupedKey, values));
+        if (priorityQueue.size() == (_groupByTopN + 1)) {
+          priorityQueue.dequeue();
+        }
+      }
+
+      int realGroupSize = _groupByTopN;
+      if (priorityQueue.size() < _groupByTopN) {
+        realGroupSize = priorityQueue.size();
+      }
+
+      int groupSize = _groupByColumns.size();
+      JSONArray result = new JSONArray();
+      for (int j = 0; j < realGroupSize; ++j) {
+        JSONObject groupByResultObject = new JSONObject();
+        Pair res = (Pair) priorityQueue.dequeue();
+        groupByResultObject.put(
+                "group",
+                new JSONArray(((String) res.getFirst()).split(
+                        GroupByConstants.GroupByDelimiter.groupByMultiDelimeter.toString(), groupSize)));
+
+        List<Serializable> values = (List<Serializable>) res.getSecond();
+        List<Object> array = new ArrayList<>();
+        for (int i=0; i<values.size(); i++) {
+          array.add(i, _aggregationFunctionList.get(i).render(values.get(i)).get("value"));
+        }
+        groupByResultObject.put("values", array);
+
+        result.put(realGroupSize - j - 1, groupByResultObject);
+      }
+
+      retJsonResultObj.put("result", result);
+      retJsonResultObj.put("functions", aggFunctions);
+      return ret;
     } catch (JSONException e) {
       LOGGER.error("Caught exception while processing group by aggregation", e);
       Utils.rethrowException(e);
@@ -204,6 +207,10 @@ public class AggregationGroupByOperatorService {
       Pair res = (Pair) priorityQueue.dequeue();
       aggregationGroupByResult.remove(res.getSecond());
     }
+  }
+
+  private PriorityQueue getGroupByPriorityQueue() {
+    return new customPriorityQueue<String>().getGroupedValuePairPriorityQueue("", true);
   }
 
   private PriorityQueue getPriorityQueue(AggregationFunction aggregationFunction, Serializable sampleValue) {
