@@ -18,6 +18,7 @@ package com.linkedin.pinot.core.query.aggregation.groupby;
 import com.linkedin.pinot.common.Utils;
 import com.linkedin.pinot.common.request.AggregationInfo;
 import com.linkedin.pinot.common.request.GroupBy;
+import com.linkedin.pinot.common.request.GroupBySort;
 import com.linkedin.pinot.common.response.ServerInstance;
 import com.linkedin.pinot.common.utils.DataTable;
 import com.linkedin.pinot.core.query.aggregation.AggregationFunction;
@@ -44,12 +45,38 @@ public class AggregationGroupByOperatorService {
   private static final Logger LOGGER = LoggerFactory.getLogger(AggregationGroupByOperatorService.class);
   private final List<String> _groupByColumns;
   private final int _groupByTopN;
+  private final List<Integer> _groupBySortFunctionsIdx;
+  private final List<Boolean> _isAsc;
   private final List<AggregationFunction> _aggregationFunctionList;
 
   public AggregationGroupByOperatorService(List<AggregationInfo> aggregationInfos, GroupBy groupByQuery) {
     _aggregationFunctionList = AggregationFunctionFactory.getAggregationFunction(aggregationInfos);
     _groupByColumns = groupByQuery.getColumns();
     _groupByTopN = (int) groupByQuery.getTopN();
+    _groupBySortFunctionsIdx = new ArrayList<>();
+    _isAsc = new ArrayList<>();
+
+    if (groupByQuery.isSetColumnSortSequence()) {
+      for (GroupBySort sort : groupByQuery.getColumnSortSequence()) {
+        if (sort.isSetColumn()) {
+          String funcName = AggregationFunctionFactory.get(sort.getColumn(), true).getFunctionName();
+          for (int i = 0; i < _aggregationFunctionList.size(); i++) {
+            if (_aggregationFunctionList.get(i).getFunctionName().equals(funcName)) {
+              _groupBySortFunctionsIdx.add(i);
+              break;
+            }
+          }
+        } else { // order groupBy key
+          String column = sort.getGroupByColumn();
+          int idx = _groupByColumns.indexOf(column);
+          if (idx >= 0) {
+            _groupBySortFunctionsIdx.add(-idx-1);
+          }
+        }
+
+        _isAsc.add(sort.isIsAsc());
+      }
+    }
   }
 
   public static List<Map<String, Serializable>> transformDataTableToGroupByResult(DataTable dataTable) {
@@ -126,17 +153,27 @@ public class AggregationGroupByOperatorService {
       }
 
       PriorityQueue priorityQueue = getGroupByPriorityQueue();
-      if (priorityQueue == null) return ret;
 
       Set<String> groupByKeySet = finalAggregationResult.get(0).keySet();
       for (String groupedKey : groupByKeySet) {
         List<Serializable> values = new ArrayList<>(_aggregationFunctionList.size());
+        sortKey sk = new sortKey();
+        sk.groupKey = groupedKey;
+        sk.columns = new ArrayList<>();
         for (int i=0; i<_aggregationFunctionList.size(); i++) {
           Map<String, Serializable> reducedGroupByResult = finalAggregationResult.get(i);
           if (reducedGroupByResult.isEmpty()) continue;
           values.add(i, reducedGroupByResult.get(groupedKey));
         }
-        priorityQueue.enqueue(new Pair(groupedKey, values));
+        for (int sortColumnIdx : _groupBySortFunctionsIdx) {
+          if (sortColumnIdx >= 0) { // aggregation key
+            sk.columns.add((Comparable) finalAggregationResult.get(sortColumnIdx).get(groupedKey));
+          } else { // groupBy key
+            String[] keys = groupedKey.split(GroupByConstants.GroupByDelimiter.groupByMultiDelimeter.toString());
+            sk.columns.add(keys[-sortColumnIdx-1]);
+          }
+        }
+        priorityQueue.enqueue(new Pair<>(sk, values));
         if (priorityQueue.size() == (_groupByTopN + 1)) {
           priorityQueue.dequeue();
         }
@@ -151,13 +188,13 @@ public class AggregationGroupByOperatorService {
       JSONArray result = new JSONArray();
       for (int j = 0; j < realGroupSize; ++j) {
         JSONObject groupByResultObject = new JSONObject();
-        Pair res = (Pair) priorityQueue.dequeue();
+        Pair<sortKey, List<Serializable>> res = (Pair) priorityQueue.dequeue();
         groupByResultObject.put(
                 "group",
-                new JSONArray(((String) res.getFirst()).split(
+                new JSONArray((res.getFirst().groupKey).split(
                         GroupByConstants.GroupByDelimiter.groupByMultiDelimeter.toString(), groupSize)));
 
-        List<Serializable> values = (List<Serializable>) res.getSecond();
+        List<Serializable> values = res.getSecond();
         List<Object> array = new ArrayList<>();
         for (int i=0; i<values.size(); i++) {
           array.add(i, _aggregationFunctionList.get(i).render(values.get(i)).get("value"));
@@ -210,7 +247,7 @@ public class AggregationGroupByOperatorService {
   }
 
   private PriorityQueue getGroupByPriorityQueue() {
-    return new customPriorityQueue<String>().getGroupedValuePairPriorityQueue("", true);
+    return new ObjectArrayPriorityQueue(_groupByTopN + 1, buildComparator(_isAsc));
   }
 
   private PriorityQueue getPriorityQueue(AggregationFunction aggregationFunction, Serializable sampleValue) {
@@ -222,6 +259,35 @@ public class AggregationGroupByOperatorService {
       }
     }
     return null;
+  }
+
+  static class sortKey {
+    List<Comparable> columns;
+    String groupKey;
+    public String toString() {
+      return "{columns: " + columns + ", groupKey: " + groupKey + "}";
+    }
+  }
+
+  private Comparator<Pair<sortKey, List<Serializable>>> buildComparator(List<Boolean> isAsc) {
+    return (o1, o2) -> {
+      List<Comparable> c1 = o1.getFirst().columns;
+      List<Comparable> c2 = o2.getFirst().columns;
+      assert c1.size() == c2.size();
+
+      if (c1.size() == 0) {
+        // order by groupBy column asc;
+        int cmp = o1.getFirst().groupKey.compareTo(o2.getFirst().groupKey);
+        return -cmp;
+      }
+
+      for (int i = 0; i < c1.size(); i++) {
+        int cmp = c1.get(i).compareTo(c2.get(i));
+        if (cmp == 0) continue;
+        return isAsc.get(i) ? -cmp : cmp;
+      }
+      return 0;
+    };
   }
 
   class customPriorityQueue<T extends Comparable> {

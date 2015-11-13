@@ -85,6 +85,13 @@ struct AggregationInfo {
 struct GroupBy {
   1: optional list<string> columns;
   2: optional i64 topN;
+  3: optional list<GroupBySort> columnSortSequence;
+}
+
+struct GroupBySort {
+  1: optional AggregationInfo column;
+  2: optional string groupByColumn;
+  3: optional bool isAsc;
 }
 
 /**

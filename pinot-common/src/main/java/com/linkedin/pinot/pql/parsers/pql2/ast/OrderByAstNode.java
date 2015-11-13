@@ -15,10 +15,10 @@
  */
 package com.linkedin.pinot.pql.parsers.pql2.ast;
 
-import com.linkedin.pinot.common.request.BrokerRequest;
-import com.linkedin.pinot.common.request.Selection;
-import com.linkedin.pinot.common.request.SelectionSort;
+import com.linkedin.pinot.common.request.*;
 import com.linkedin.pinot.pql.parsers.Pql2CompilationException;
+
+import java.util.List;
 
 
 /**
@@ -28,14 +28,33 @@ public class OrderByAstNode extends BaseAstNode {
   @Override
   public void updateBrokerRequest(BrokerRequest brokerRequest) {
     Selection selections = brokerRequest.getSelections();
+    GroupBy groupBy = brokerRequest.getGroupBy();
+
 
     for (AstNode astNode : getChildren()) {
       if (astNode instanceof OrderByExpressionAstNode) {
         OrderByExpressionAstNode node = (OrderByExpressionAstNode) astNode;
-        SelectionSort elem = new SelectionSort();
-        elem.setColumn(node.getColumn());
-        elem.setIsAsc("asc".equalsIgnoreCase(node.getOrdering()));
-        selections.addToSelectionSortSequence(elem);
+        if (groupBy != null) {
+          List<? extends AstNode> children = astNode.getChildren();
+          AstNode child = children.get(0);
+          if (child instanceof FunctionCallAstNode) {
+            AggregationInfo info = ((FunctionCallAstNode) child).buildAggregationInfo();
+            GroupBySort elem = new GroupBySort();
+            elem.setIsAsc("asc".equalsIgnoreCase(node.getOrdering()));
+            elem.setColumn(info);
+            groupBy.addToColumnSortSequence(elem);
+          } else if (child instanceof IdentifierAstNode) {
+            GroupBySort elem = new GroupBySort();
+            elem.setIsAsc("asc".equalsIgnoreCase(node.getOrdering()));
+            elem.setGroupByColumn(node.getColumn());
+            groupBy.addToColumnSortSequence(elem);
+          }
+        } else if (selections != null) {
+          SelectionSort elem = new SelectionSort();
+          elem.setColumn(node.getColumn());
+          elem.setIsAsc("asc".equalsIgnoreCase(node.getOrdering()));
+          selections.addToSelectionSortSequence(elem);
+        }
       } else {
         throw new Pql2CompilationException("Child node of ORDER BY node is not an expression node");
       }

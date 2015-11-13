@@ -43,7 +43,7 @@ import com.linkedin.pinot.core.data.manager.offline.SegmentDataManager;
 import com.linkedin.pinot.core.data.manager.offline.TableDataManager;
 import com.linkedin.pinot.core.indexsegment.IndexSegment;
 import com.linkedin.pinot.core.plan.Plan;
-import com.linkedin.pinot.core.plan.maker.InstancePlanMakerImplV2;
+import com.linkedin.pinot.core.plan.maker.InstancePlanMakerImplV3;
 import com.linkedin.pinot.core.plan.maker.PlanMaker;
 import com.linkedin.pinot.core.query.config.QueryExecutorConfig;
 import com.linkedin.pinot.core.query.pruner.SegmentPrunerService;
@@ -90,7 +90,7 @@ public class ServerQueryExecutorV1Impl implements QueryExecutor {
       _segmentPrunerService = new SegmentPrunerServiceImpl(_queryExecutorConfig.getPrunerConfig());
     }
     LOGGER.info("Trying to build QueryPlanMaker");
-    _planMaker = new InstancePlanMakerImplV2();
+    _planMaker = new InstancePlanMakerImplV3();
     LOGGER.info("Trying to build QueryExecutorTimer");
     if (_queryExecutorTimer == null) {
       _queryExecutorTimer =

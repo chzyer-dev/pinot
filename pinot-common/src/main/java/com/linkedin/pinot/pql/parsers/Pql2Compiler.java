@@ -29,12 +29,16 @@ import org.antlr.v4.runtime.UnbufferedTokenStream;
 import org.antlr.v4.runtime.tree.ParseTree;
 import org.antlr.v4.runtime.tree.ParseTreeWalker;
 import org.json.JSONObject;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 
 /**
  * PQL 2 compiler.
  */
 public class Pql2Compiler extends AbstractCompiler {
+  private static final Logger LOGGER = LoggerFactory.getLogger(Pql2Compiler.class);
+
   @Override
   public JSONObject compile(String expression)
       throws RecognitionException {
@@ -60,14 +64,17 @@ public class Pql2Compiler extends AbstractCompiler {
       walker.walk(listener, parseTree);
 
       AstNode rootNode = listener.getRootNode();
+      LOGGER.info("to brokerRequest: {}", rootNode.toString(0));
       // System.out.println(rootNode.toString(0));
 
       BrokerRequest brokerRequest = new BrokerRequest();
       rootNode.updateBrokerRequest(brokerRequest);
+      LOGGER.info("finish to update brokerRequest");
       return brokerRequest;
     } catch (Pql2CompilationException e) {
       throw e;
     } catch (Exception e) {
+      e.printStackTrace();
       throw new Pql2CompilationException(e.getMessage());
     }
   }
